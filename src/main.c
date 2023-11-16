@@ -72,6 +72,31 @@ void uevt_log(char* str) {
 	LOG_RAW("%s\n", str);
 }
 
+static char serial_fifo[16];
+static uint8_t serial_wp = 0;
+uint8_t serial_got(const char* str) {
+	uint8_t len = strlen(str);
+	for(uint8_t i = 1; i <= len; i++) {
+		if(serial_fifo[serial_wp + (0x10 - i) & 0xF] != str[len - i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+#include "pico/bootrom.h"
+void serial_receive(uint8_t const* buffer, uint16_t bufsize) {
+	for(uint16_t i = 0; i < bufsize; i++) {
+		if((*buffer == 0x0A) || (*buffer == 0x0D)) {
+			if(serial_got("BOOTLOADER")) {
+				ws2812_setpixel(U32RGB(0, 0, 10));
+				reset_usb_boot(0, 0);
+			}
+		} else {
+			serial_fifo[serial_wp++ & 0xF] = *buffer++;
+		}
+	}
+}
+
 extern void cdc_task(void);
 int main() {
 	CRITICAL_REGION_INIT();
