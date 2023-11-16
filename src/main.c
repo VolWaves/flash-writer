@@ -113,6 +113,7 @@ int main() {
 	struct repeating_timer timer;
 	add_repeating_timer_ms(250, timer_4hz_callback, NULL, &timer);
 	tusb_init();
+	cdc_log_init();
 	while(true) {
 		app_sched_execute();
 		tud_task();
