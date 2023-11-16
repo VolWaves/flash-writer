@@ -10,7 +10,11 @@
 
 #include "tusb_config.h"
 
+#include "ws2812_drv.h"
+
 #define LED_PIN PICO_DEFAULT_LED_PIN
+
+#define U32RGB(r, g, b) (((uint32_t)(r) << 8) | ((uint32_t)(g) << 16) | (uint32_t)(b))
 
 #include "pico/sync.h"
 critical_section_t scheduler_lock;
