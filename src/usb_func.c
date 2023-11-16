@@ -8,12 +8,15 @@
 // CDC Funcs
 //--------------------------------------------------------------------+
 
+__attribute__((weak)) void serial_receive(uint8_t const* buffer, uint16_t bufsize) {
+}
 void cdc_task(void) {
 	uint8_t itf;
 	for(itf = 0; itf < CFG_TUD_CDC; itf++) {
 		if(tud_cdc_n_available(itf)) {
 			uint8_t buf[64];
 			uint32_t count = tud_cdc_n_read(itf, buf, sizeof(buf));
+			serial_receive(buf, count);
 		}
 	}
 }
