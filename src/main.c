@@ -108,8 +108,7 @@ int main() {
 	adc_set_temp_sensor_enabled(true);
 	adc_select_input(4);
 
-	gpio_init(LED_PIN);
-	gpio_set_dir(LED_PIN, GPIO_OUT);
+	ws2812_setup();
 
 	struct repeating_timer timer;
 	add_repeating_timer_ms(250, timer_4hz_callback, NULL, &timer);
