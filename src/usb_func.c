@@ -10,6 +10,16 @@
 
 __attribute__((weak)) void serial_receive(uint8_t const* buffer, uint16_t bufsize) {
 }
+static uint16_t log_depth_max = 0;
+void cdc_log_init(void) {
+	log_depth_max = tud_cdc_n_write_available(0);
+}
+void cdc_log_flush(void) {
+	if(tud_cdc_n_write_available(0) < log_depth_max) {
+		tud_cdc_n_write_flush(0);
+	}
+}
+
 void cdc_task(void) {
 	uint8_t itf;
 	for(itf = 0; itf < CFG_TUD_CDC; itf++) {
@@ -19,6 +29,7 @@ void cdc_task(void) {
 			serial_receive(buf, count);
 		}
 	}
+	cdc_log_flush();
 }
 
 static void serial_write(uint8_t itf, uint8_t buf[], uint32_t count) {

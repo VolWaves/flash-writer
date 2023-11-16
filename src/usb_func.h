@@ -4,5 +4,6 @@
 
 void cdc_task(void);
 void cdc_log_print(char* str);
+void cdc_log_init(void);
 
 #endif
