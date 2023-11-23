@@ -11,7 +11,6 @@ target_sources(${PROJECT_NAME} PUBLIC ${SRC})
 target_include_directories(${PROJECT_NAME} PUBLIC
 	${CMAKE_CURRENT_LIST_DIR}
 )
-pico_set_binary_type(${PROJECT_NAME} copy_to_ram)
 # Link with the pico stdlib
 # hardware_clocks hardware_i2c hardware_pio hardware_interp hardware_rtc hardware_uart hardware_irq hardware_resets
 # pico_unique_id
@@ -24,6 +23,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	hardware_adc
 	hardware_sync
 	hardware_pio
+	hardware_spi
 )
 # Create map/bin/hex/uf2 files
 pico_add_extra_outputs(${PROJECT_NAME})

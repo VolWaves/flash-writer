@@ -26,22 +26,35 @@ static __inline void CRITICAL_REGION_EXIT(void) {
 	critical_section_exit(&scheduler_lock);
 }
 
+bool log_silent = false;
+uint32_t flash_busy_timeout = 0;
+
 bool timer_4hz_callback(struct repeating_timer* t) {
-	LOG_RAW("At %lld ms\n", time_us_64() / 1000);
+	if(!log_silent) {
+		LOG_RAW("At %lld ms\n", time_us_64() / 1000);
+	}
 	uevt_bc_e(UEVT_TIMER_4HZ);
 	return true;
 }
 
+enum {
+	ERR_CHECK,
+	ERR_ID,
+	ERR_ERASE,
+	ERR_TIMEOUT,
+} err_type;
+
 typedef enum {
 	LED_IDLE,
 	LED_WORKING,
+	LED_WORKING_ALT,
 	LED_SUCCESS,
 	LED_ERROR
-} sLED_STATE;
-sLED_STATE led_state = LED_IDLE;
+} eLED_STATE;
+eLED_STATE led_state = LED_IDLE;
 uint8_t led_timeout = 0;
 
-void led_set_state(sLED_STATE state) {
+void __not_in_flash_func(led_set_state)(eLED_STATE state) {
 	led_state = state;
 	if(state != LED_IDLE) {
 		led_timeout = 8;
@@ -52,6 +65,9 @@ void led_set_state(sLED_STATE state) {
 	switch(state) {
 		case LED_WORKING:
 			ws2812_setpixel(U32RGB(22, 22, 0));
+			break;
+		case LED_WORKING_ALT:
+			ws2812_setpixel(U32RGB(22, 0, 22));
 			break;
 		case LED_SUCCESS:
 			ws2812_setpixel(U32RGB(0, 30, 0));
@@ -91,15 +107,139 @@ void temperature_routine(void) {
 	}
 	tick += 1;
 }
+#include "flash_drv.h"
 
-void main_handler(uevt_t* evt) {
+void test_routine(void) {
+	static uint16_t flag = 0;
+	flag += 1;
+	if(flag == 6) {
+		uevt_bc_e(UEVT_CTL_FLASH_START);
+	}
+}
+
+#include "assets.h"
+struct repeating_timer flash_timer;
+static uint8_t flash_assets_n = 0;
+static uint32_t flash_assets_offset = 0;
+static const uint32_t flash_assets_length = 25600;
+static uint32_t flash_addr = 0;
+static uint32_t flash_check_addr;
+static const uint8_t* flash_check_src;
+static uint32_t flash_check_len;
+enum {
+	FLASH_CHECK,
+	FLASH_CONTINUE
+} flash_routine_next = FLASH_CHECK;
+bool flash_routine_callback(struct repeating_timer* t) {
+	if(!is_busy()) {
+		flash_busy_timeout = 0;
+		cancel_repeating_timer(t);
+		if(flash_routine_next == FLASH_CHECK) {
+			uevt_bc_e(UEVT_CTL_FLASH_CHECK);
+		} else if(flash_routine_next == FLASH_CONTINUE) {
+			uevt_bc_e(UEVT_CTL_FLASH_CONTINUE);
+		}
+		return false;
+	}
+	flash_busy_timeout += 1;
+	if(flash_busy_timeout > 1000) {
+		flash_busy_timeout = 0;
+		cancel_repeating_timer(t);
+		err_type = ERR_TIMEOUT;
+		uevt_bc_e(UEVT_FLASH_ERROR);
+		return false;
+	}
+	return true;
+}
+
+void __not_in_flash_func(main_handler)(uevt_t* evt) {
+	static uint8_t flash_flag = 0;
 	switch(evt->evt_id) {
+		case UEVT_FLASH_ERROR:
+			LOG_RAW("FLASH ERROR[%d]!!!\n", err_type);
+			led_set_state(LED_ERROR);
+			log_silent = false;
+			break;
+		case UEVT_FLASH_SUCCESS:
+			LOG_RAW("FLASH SUCCEED!!!\n");
+			led_set_state(LED_SUCCESS);
+			log_silent = false;
+			break;
+		case UEVT_CTL_FLASH_START:
+			log_silent = true;
+			flash_addr = 0;
+			flash_assets_offset = 0;
+			flash_assets_n = 0;
+			led_set_state(LED_WORKING);
+			uint8_t* id = flash_ID();
+			LOG_RAW("FLASH ID = %02X%02X%02X\n", id[0], id[1], id[2]);
+			flash_CE();
+			sleep_us(50);
+			if(is_busy()) {
+				uevt_bc_e(UEVT_CTL_FLASH_CONTINUE);
+			} else {
+				err_type = ERR_ERASE;
+				uevt_bc_e(UEVT_FLASH_ERROR);
+			}
+			break;
+		case UEVT_CTL_FLASH_CHECK:
+			if(is_busy()) {
+				flash_routine_next = FLASH_CHECK;
+				add_repeating_timer_us(1500, flash_routine_callback, NULL, &flash_timer);
+				break;
+			}
+			uint8_t check_buf[0x100];
+			uint8_t* check_dst = check_buf;
+			flash_read(flash_check_addr, check_buf, flash_check_len);
+			for(size_t i = 0; i < 0x100; i++) {
+				if(*flash_check_src++ != *check_dst++) {
+					err_type = ERR_CHECK;
+					uevt_bc_e(UEVT_FLASH_ERROR);
+					return;
+				}
+			}
+			uevt_bc_e(UEVT_CTL_FLASH_CONTINUE);
+			break;
+		case UEVT_CTL_FLASH_CONTINUE:
+			if(flash_assets_n >= 31) {
+				uevt_bc_e(UEVT_FLASH_SUCCESS);
+				break;
+			}
+			if(flash_flag & 0x1) {
+				led_set_state(LED_WORKING_ALT);
+			} else {
+				led_set_state(LED_WORKING);
+			}
+			if(is_busy()) {
+				flash_routine_next = FLASH_CONTINUE;
+				add_repeating_timer_us(1500, flash_routine_callback, NULL, &flash_timer);
+			} else {
+				uint32_t current_write_length = flash_assets_length - flash_assets_offset > 0x100 ? 0x100 : flash_assets_length - flash_assets_offset;
+				flash_write(flash_addr + flash_assets_offset, &(fire_array[flash_assets_n]->map[flash_assets_offset]), current_write_length);
+				flash_check_addr = flash_addr + flash_assets_offset;
+				flash_check_src = &(fire_array[flash_assets_n]->map[flash_assets_offset]);
+				flash_check_len = current_write_length;
+				flash_assets_offset += 0x100;
+				if(flash_assets_offset >= flash_assets_length) {
+					LOG_RAW("ASSETS[%d] at 0x%06x\n", flash_assets_n, flash_addr);
+					flash_assets_n += 1;
+					flash_addr += flash_assets_offset;
+					flash_assets_offset = 0;
+					flash_flag += 1;
+				}
+				uevt_bc_e(UEVT_CTL_FLASH_CHECK);
+			}
+			break;
+
 		case UEVT_TIMER_4HZ:
+			// test_routine();
 			led_blink_routine();
 			temperature_routine();
 			break;
 		case UEVT_ADC_TEMPERATURE_RESULT:
-			LOG_RAW("Temperature is %0.1f\n", *((float*)(evt->content)));
+			if(!log_silent) {
+				LOG_RAW("Temperature is %0.1f\n", *((float*)(evt->content)));
+			}
 			break;
 	}
 }
@@ -127,6 +267,9 @@ void serial_receive(uint8_t const* buffer, uint16_t bufsize) {
 				ws2812_setpixel(U32RGB(0, 0, 10));
 				reset_usb_boot(0, 0);
 			}
+			if(serial_got("FLASH")) {
+				uevt_bc_e(UEVT_CTL_FLASH_START);
+			}
 		} else {
 			serial_fifo[serial_wp++ & 0xF] = *buffer++;
 		}
@@ -134,7 +277,7 @@ void serial_receive(uint8_t const* buffer, uint16_t bufsize) {
 }
 
 extern void cdc_task(void);
-int main() {
+int __not_in_flash_func(main)() {
 	CRITICAL_REGION_INIT();
 	app_sched_init();
 	user_event_init();
@@ -145,6 +288,7 @@ int main() {
 	adc_select_input(4);
 
 	ws2812_setup();
+	flash_init();
 
 	struct repeating_timer timer;
 	add_repeating_timer_ms(250, timer_4hz_callback, NULL, &timer);
